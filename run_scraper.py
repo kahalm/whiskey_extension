@@ -70,6 +70,16 @@ def cmd_status(args):
     print(f"Last detail WBID:    {last_wbid}")
 
 
+def cmd_reset_releases(args):
+    conn = get_connection()
+    init_db(conn)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM releases_state")
+    conn.commit()
+    conn.close()
+    print("Releases state reset. Next run starts from 2026.")
+
+
 def cmd_reset(args):
     conn = get_connection()
     with conn.cursor() as cur:
@@ -113,6 +123,10 @@ def main():
     # status
     p_status = sub.add_parser("status", help="Show scraping progress")
     p_status.set_defaults(func=cmd_status)
+
+    # reset-releases
+    p_reset_rel = sub.add_parser("reset-releases", help="Reset releases progress (re-scrape all years)")
+    p_reset_rel.set_defaults(func=cmd_reset_releases)
 
     # reset
     p_reset = sub.add_parser("reset", help="Delete database and start fresh")
