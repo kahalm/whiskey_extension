@@ -223,7 +223,18 @@ async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | 
             log.warning("Releases page %s: HTTP %s", url, response.status if response else "None")
             return [], None
 
-        await page.wait_for_selector("table.whiskytable, .no-results, h1", timeout=15000)
+        # Wait for real content (not Cloudflare challenge page)
+        try:
+            await page.wait_for_selector("table.whiskytable, .no-results", timeout=30000)
+        except Exception:
+            # Cloudflare may need more time — wait and retry
+            log.info("Waiting for Cloudflare challenge on %s ...", url)
+            await asyncio.sleep(10)
+            try:
+                await page.wait_for_selector("table.whiskytable, .no-results", timeout=30000)
+            except Exception:
+                log.warning("Page didn't load after Cloudflare wait: %s", url)
+                return [], None
         await asyncio.sleep(1)
 
         html = await page.content()
