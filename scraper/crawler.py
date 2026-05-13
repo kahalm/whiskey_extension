@@ -475,6 +475,7 @@ def parse_whisky_page(html: str, wbid: int) -> dict | None:
         "vintage": attrs.get("Vintage"),
         "bottled": attrs.get("Bottled"),
         "category": attrs.get("Category"),
+        "shop_price": attrs.get("Last average shop price"),
         "rating": rating,
         "votes": votes,
         "image_url": image_url,
