@@ -169,19 +169,28 @@ def get_releases_state(conn, filter_key: str = "default") -> int:
 
 
 def set_releases_state(conn, year: int, filter_key: str = "default"):
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM releases_state WHERE filter_key = %s", (filter_key,))
-        if cur.fetchone():
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM releases_state WHERE filter_key = %s", (filter_key,))
+            if cur.fetchone():
+                cur.execute(
+                    "UPDATE releases_state SET last_year = %s WHERE filter_key = %s",
+                    (year, filter_key),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO releases_state (filter_key, last_year) VALUES (%s, %s)",
+                    (filter_key, year),
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        with conn.cursor() as cur:
             cur.execute(
-                "UPDATE releases_state SET last_year = %s WHERE filter_key = %s",
-                (year, filter_key),
-            )
-        else:
-            cur.execute(
-                "INSERT INTO releases_state (filter_key, last_year) VALUES (%s, %s)",
+                "REPLACE INTO releases_state (filter_key, last_year) VALUES (%s, %s)",
                 (filter_key, year),
             )
-    conn.commit()
+        conn.commit()
 
 
 def get_all_releases_states(conn) -> list[dict]:

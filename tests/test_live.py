@@ -2,7 +2,7 @@
 
 Run with: python -m pytest tests/test_live.py -v -s
 These tests may fail due to Cloudflare blocking — marked as xfail.
-Requires: playwright browsers installed
+Requires: nodriver + Chrome installed
 """
 
 import asyncio
@@ -19,6 +19,7 @@ CF_REASON = "May fail due to Cloudflare blocking"
 @pytest.fixture(scope="module")
 def event_loop():
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     yield loop
     loop.close()
 
@@ -26,28 +27,19 @@ def event_loop():
 @pytest.fixture(scope="module")
 def browser_page(event_loop):
     """Start browser once for all tests in this module."""
-    from playwright.async_api import async_playwright
-
-    pw = None
     browser = None
 
     async def setup():
-        nonlocal pw, browser
-        pw = await async_playwright().start()
-        browser, context, page = await _create_browser(pw, headless=False)
-        await _warmup(page)
+        nonlocal browser
+        browser = await _create_browser(headless=False)
+        page = await _warmup(browser)
         return page
 
     page = event_loop.run_until_complete(setup())
     yield page
 
-    async def teardown():
-        if browser:
-            await browser.close()
-        if pw:
-            await pw.stop()
-
-    event_loop.run_until_complete(teardown())
+    if browser:
+        browser.stop()
 
 
 # ---------------------------------------------------------------------------

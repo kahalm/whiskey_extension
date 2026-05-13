@@ -11,6 +11,9 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
     volumes:
       - db-data:/var/lib/mysql
+    networks:
+      vpn:
+        ipv4_address: 172.29.0.10
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       start_period: 10s
@@ -18,20 +21,52 @@ services:
       timeout: 5s
       retries: 3
 
+  gluetun:
+    image: qmcgaw/gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      vpn:
+    environment:
+      VPN_SERVICE_PROVIDER: airvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_PRESHARED_KEY: ${WIREGUARD_PRESHARED_KEY}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES}
+      SERVER_COUNTRIES: ${VPN_COUNTRY:-Netherlands}
+      FIREWALL_OUTBOUND_SUBNETS: 172.29.0.0/24
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "https://airvpn.org"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   scraper:
     image: ghcr.io/kahalm/whiskey_extension:latest
-    network_mode: host
+    network_mode: "service:gluetun"
     restart: "no"
     depends_on:
       db:
         condition: service_healthy
+      gluetun:
+        condition: service_healthy
     environment:
-      DB_HOST: 127.0.0.1
-      DB_PORT: ${DB_PORT:-3306}
+      DB_HOST: 172.29.0.10
+      DB_PORT: 3306
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${MARIADB_PASSWORD}
       DB_NAME: ${DB_NAME}
-    command: ["releases"]
+    command: ["--debug", "detail"]
+
+networks:
+  vpn:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
 
 volumes:
   db-data:

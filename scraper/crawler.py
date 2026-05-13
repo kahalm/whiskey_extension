@@ -5,8 +5,7 @@ import re
 import string
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext
-from playwright_stealth import Stealth
+import nodriver as uc
 
 from scraper.db import (
     get_connection, init_db, save_whisky, save_whisky_basic,
@@ -106,21 +105,15 @@ def parse_search_results(html: str) -> list[dict]:
     return results
 
 
-async def search_whiskies(page: Page, query: str) -> list[dict]:
+async def search_whiskies(page, query: str) -> list[dict]:
     """Fetch search results for a query and return parsed whisky data."""
     url = f"{SEARCH_URL}?q={query}"
     try:
-        response = await page.goto(url, wait_until="load", timeout=60000)
-        if not response or response.status != 200:
-            log.warning("Search '%s': HTTP %s", query, response.status if response else "None")
-            return []
-
-        await page.wait_for_selector("table.whiskytable, .no-results, h1", timeout=15000)
+        await page.get(url)
+        await page.select("table.whiskytable, .no-results", timeout=15)
         await asyncio.sleep(1)
-
-        html = await page.content()
+        html = await page.get_content()
         return parse_search_results(html)
-
     except Exception as e:
         log.error("Search '%s': %s", query, e)
         return []
@@ -190,20 +183,19 @@ async def run_search_collector(
 
     total_new = 0
 
-    async with async_playwright() as p:
-        browser, context, page = await _create_browser(p, headless)
-        await _warmup(page)
+    browser = await _create_browser(headless)
+    page = await _warmup(browser)
 
-        try:
-            for query in SEARCH_QUERIES:
-                total_new += await _search_recursive(
-                    page, conn, query, last_query, delay_min, delay_max
-                )
-        except KeyboardInterrupt:
-            log.info("Interrupted.")
-        finally:
-            await browser.close()
-            conn.close()
+    try:
+        for query in SEARCH_QUERIES:
+            total_new += await _search_recursive(
+                page, conn, query, last_query, delay_min, delay_max
+            )
+    except KeyboardInterrupt:
+        log.info("Interrupted.")
+    finally:
+        browser.stop()
+        conn.close()
 
     log.info("Search collector done. %d new whiskies added.", total_new)
 
@@ -286,28 +278,23 @@ def parse_releases_table(html: str) -> list[dict]:
     return results
 
 
-async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | None]:
+async def _fetch_releases_page(page, url: str) -> tuple[list[dict], str | None]:
     """Fetch a single releases page, return (results, next_page_url | None)."""
     try:
-        response = await page.goto(url, wait_until="load", timeout=60000)
-        if not response or response.status != 200:
-            log.warning("Releases page %s: HTTP %s", url, response.status if response else "None")
-            return [], None
+        await page.get(url)
 
         # Wait for real content (not Cloudflare challenge page)
-        try:
-            await page.wait_for_selector("table.whiskytable, .no-results", timeout=30000)
-        except Exception:
+        el = await page.select("table.whiskytable, .no-results", timeout=30)
+        if el is None:
             log.info("Waiting for Cloudflare challenge on %s ...", url)
             await asyncio.sleep(10)
-            try:
-                await page.wait_for_selector("table.whiskytable, .no-results", timeout=30000)
-            except Exception:
+            el = await page.select("table.whiskytable, .no-results", timeout=30)
+            if el is None:
                 log.warning("Page didn't load after Cloudflare wait: %s", url)
                 return [], None
         await asyncio.sleep(1)
 
-        html = await page.content()
+        html = await page.get_content()
         results = parse_releases_table(html)
 
         # Check for next page link
@@ -391,20 +378,19 @@ async def run_releases_collector(
 
     total_new = 0
 
-    async with async_playwright() as p:
-        browser, context, page = await _create_browser(p, headless)
-        await _warmup(page)
+    browser = await _create_browser(headless)
+    page = await _warmup(browser)
 
-        try:
-            total_new += await _run_releases_pass(page, conn, "", delay_min, delay_max)
-            total_new += await _run_releases_pass(page, conn, "0", delay_min, delay_max)
-        except KeyboardInterrupt:
-            log.info("Interrupted.")
-        except Exception as e:
-            log.error("Browser error: %s", e)
-        finally:
-            await browser.close()
-            conn.close()
+    try:
+        total_new += await _run_releases_pass(page, conn, "", delay_min, delay_max)
+        total_new += await _run_releases_pass(page, conn, "0", delay_min, delay_max)
+    except KeyboardInterrupt:
+        log.info("Interrupted.")
+    except Exception as e:
+        log.error("Browser error: %s", e)
+    finally:
+        browser.stop()
+        conn.close()
 
     log.info("Releases collector done. %d new whiskies added.", total_new)
 
@@ -496,28 +482,23 @@ def parse_whisky_page(html: str, wbid: int) -> dict | None:
     }
 
 
-async def scrape_whisky(page: Page, wbid: int) -> dict | None:
+async def scrape_whisky(page, wbid: int) -> dict | None:
     url = f"{BASE_URL}/{wbid}"
     try:
-        response = await page.goto(url, wait_until="commit", timeout=60000)
-        if response and response.status == 404:
-            return None
+        await page.get(url)
 
         # Wait for real content (not Cloudflare challenge page)
-        try:
-            await page.wait_for_selector("dl, .whisky-header, .block-whisky", timeout=30000)
-        except Exception:
-            # Cloudflare may need more time
+        el = await page.select("dl, .whisky-header, .block-whisky", timeout=30)
+        if el is None:
             log.debug("WBID %d: waiting for Cloudflare...", wbid)
             await asyncio.sleep(10)
-            try:
-                await page.wait_for_selector("dl, .whisky-header, .block-whisky", timeout=30000)
-            except Exception:
-                log.warning("WBID %d: page didn't load (status %s)", wbid, response.status if response else "?")
+            el = await page.select("dl, .whisky-header, .block-whisky", timeout=30)
+            if el is None:
+                log.warning("WBID %d: page didn't load", wbid)
                 return None
         await asyncio.sleep(1)
 
-        html = await page.content()
+        html = await page.get_content()
         return parse_whisky_page(html, wbid)
 
     except Exception as e:
@@ -547,43 +528,42 @@ async def run_detail_crawler(
     scraped = 0
     skipped = 0
 
-    async with async_playwright() as p:
-        browser, context, page = await _create_browser(p, headless)
-        await _warmup(page)
+    browser = await _create_browser(headless)
+    page = await _warmup(browser)
 
-        try:
-            for i, wbid in enumerate(wbids):
-                data = await scrape_whisky(page, wbid)
+    try:
+        for i, wbid in enumerate(wbids):
+            data = await scrape_whisky(page, wbid)
 
-                if data:
-                    save_whisky(conn, data)
-                    scraped += 1
-                    log.info(
-                        "[%d/%d] %s - %s (%s) rating=%s",
-                        already_done + scraped, total_in_db,
-                        data.get("distillery", "?"),
-                        data["name"],
-                        data.get("strength", "?"),
-                        data.get("rating", "?"),
-                    )
-                else:
-                    skipped += 1
-                    log.debug("[%d/%d] WBID %d not found / skipped", i + 1, len(wbids), wbid)
+            if data:
+                save_whisky(conn, data)
+                scraped += 1
+                log.info(
+                    "[%d/%d] %s - %s (%s) rating=%s",
+                    already_done + scraped, total_in_db,
+                    data.get("distillery", "?"),
+                    data["name"],
+                    data.get("strength", "?"),
+                    data.get("rating", "?"),
+                )
+            else:
+                skipped += 1
+                log.debug("[%d/%d] WBID %d not found / skipped", i + 1, len(wbids), wbid)
 
-                if (i + 1) % 100 == 0:
-                    log.info(
-                        "Progress: %d/%d | scraped=%d skipped=%d",
-                        i + 1, len(wbids), scraped, skipped,
-                    )
+            if (i + 1) % 100 == 0:
+                log.info(
+                    "Progress: %d/%d | scraped=%d skipped=%d",
+                    i + 1, len(wbids), scraped, skipped,
+                )
 
-                delay = random.uniform(delay_min, delay_max)
-                await asyncio.sleep(delay)
+            delay = random.uniform(delay_min, delay_max)
+            await asyncio.sleep(delay)
 
-        except KeyboardInterrupt:
-            log.info("Interrupted at %d/%d", i + 1, len(wbids))
-        finally:
-            await browser.close()
-            conn.close()
+    except KeyboardInterrupt:
+        log.info("Interrupted at %d/%d", i + 1, len(wbids))
+    finally:
+        browser.stop()
+        conn.close()
 
     log.info("Done. Scraped: %d, Skipped: %d", scraped, skipped)
 
@@ -592,43 +572,43 @@ async def run_detail_crawler(
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-async def _create_browser(p, headless: bool) -> tuple[Browser, BrowserContext, Page]:
-    browser = await p.chromium.launch(
+async def _create_browser(headless: bool = True):
+    """Start a Chrome browser via nodriver (undetected)."""
+    browser = await uc.start(
         headless=headless,
-        args=[
-            "--disable-blink-features=AutomationControlled",
+        browser_args=[
             "--no-sandbox",
+            "--window-size=1920,1080",
+            "--disable-gpu",
         ],
     )
-    stealth = Stealth()
-    context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        ),
-        viewport={"width": 1920, "height": 1080},
-        locale="en-US",
-    )
-    await stealth.apply_stealth_async(context)
-    page = await context.new_page()
-    return browser, context, page
+    return browser
 
 
-async def _warmup(page: Page):
-    log.info("Warming up: visiting homepage...")
+async def _check_ip(browser):
+    """Log public IP address for verification."""
     try:
-        await page.goto("https://www.whiskybase.com", wait_until="load", timeout=60000)
-        await asyncio.sleep(5)
-        try:
-            accept_btn = page.locator(
-                "button:has-text('Accept'), button:has-text('agree'), "
-                ".cookie-accept, #onetrust-accept-btn-handler"
-            )
-            if await accept_btn.count() > 0:
-                await accept_btn.first.click()
-                await asyncio.sleep(1)
-        except Exception:
-            pass
+        page = await browser.get("https://api.ipify.org")
+        await asyncio.sleep(2)
+        html = await page.get_content()
+        from bs4 import BeautifulSoup as _BS
+        ip = _BS(html, "html.parser").get_text(strip=True)
+        log.info("Public IP: %s", ip)
     except Exception as e:
-        log.warning("Homepage warmup failed: %s", e)
+        log.warning("Could not determine public IP: %s", e)
+
+
+async def _warmup(browser):
+    """Visit homepage to establish cookies and pass Cloudflare challenge."""
+    await _check_ip(browser)
+    log.info("Warming up: visiting homepage...")
+    page = await browser.get("https://www.whiskybase.com")
+    await asyncio.sleep(5)
+    try:
+        accept_btn = await page.find("Accept", best_match=True, timeout=5)
+        if accept_btn:
+            await accept_btn.click()
+            await asyncio.sleep(1)
+    except Exception:
+        pass
+    return page
