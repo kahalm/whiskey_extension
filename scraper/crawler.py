@@ -240,6 +240,15 @@ async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | 
         html = await page.content()
         results = parse_search_results(html)
 
+        if not results:
+            soup_dbg = BeautifulSoup(html, "html.parser")
+            tables = soup_dbg.find_all("table")
+            log.info("DEBUG: %d tables found, classes: %s",
+                     len(tables), [t.get("class") for t in tables])
+            title = soup_dbg.find("title")
+            log.info("DEBUG: page title: %s, HTML length: %d",
+                     title.get_text(strip=True) if title else "?", len(html))
+
         # Check for next page link
         soup = BeautifulSoup(html, "html.parser")
         next_link = soup.select_one("a.next, li.next a, a[rel='next']")
