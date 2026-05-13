@@ -20,7 +20,6 @@ def cmd_releases(args):
             delay_min=args.delay_min,
             delay_max=args.delay_max,
             headless=not args.visible,
-            votes=args.votes,
         )
     )
 
@@ -101,7 +100,6 @@ def main():
     p_releases.add_argument("--delay-min", type=float, default=2.0, help="Min delay (seconds)")
     p_releases.add_argument("--delay-max", type=float, default=5.0, help="Max delay (seconds)")
     p_releases.add_argument("--visible", action="store_true", help="Show browser window")
-    p_releases.add_argument("--votes", type=str, default="", help="Filter by votes (e.g. '0' for unrated)")
     p_releases.set_defaults(func=cmd_releases)
 
     # search command (Phase 1)

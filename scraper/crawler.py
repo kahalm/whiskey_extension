@@ -327,24 +327,66 @@ async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | 
         return [], None
 
 
-async def run_releases_collector(
-    delay_min: float = 2.0,
-    delay_max: float = 5.0,
-    headless: bool = True,
-    votes: str = "",
-):
-    """Phase 1b: Collect WBIDs via new-releases filter, iterating years 2026→1870."""
-    conn = get_connection()
-    init_db(conn)
-
+async def _run_releases_pass(page, conn, votes, delay_min, delay_max):
+    """Single pass over all years for a given votes filter. Returns count of new whiskies."""
     filter_key = f"votes={votes}" if votes != "" else "default"
     last_year = get_releases_state(conn, filter_key)
     log.info(
-        "Releases collector [%s]: years %d→%d, %d whiskies in DB%s",
+        "Releases pass [%s]: years %d→%d, %d whiskies in DB%s",
         filter_key, RELEASES_START_YEAR, RELEASES_END_YEAR,
         get_whisky_count(conn),
         f" (resuming after year {last_year})" if last_year else "",
     )
+
+    total_new = 0
+
+    for year in range(RELEASES_START_YEAR, RELEASES_END_YEAR - 1, -1):
+        if last_year and year >= last_year:
+            continue
+
+        url = f"{RELEASES_URL}?bottle_date_year={year}"
+        if votes != "":
+            url += f"&votes={votes}"
+        page_num = 1
+        year_new = 0
+
+        while url:
+            results, next_url = await _fetch_releases_page(page, url)
+
+            for item in results:
+                if not has_wbid(conn, item["wbid"]):
+                    save_whisky_basic(conn, item)
+                    year_new += 1
+
+            log.info(
+                "Year %d page %d: %d results, %d new",
+                year, page_num, len(results), year_new,
+            )
+
+            url = next_url
+            page_num += 1
+            await asyncio.sleep(random.uniform(delay_min, delay_max))
+
+        total_new += year_new
+        set_releases_state(conn, year, filter_key)
+        log.info(
+            "Year %d done: %d new (total in DB: %d)",
+            year, year_new, get_whisky_count(conn),
+        )
+
+    log.info("Pass [%s] done. %d new whiskies.", filter_key, total_new)
+    return total_new
+
+
+async def run_releases_collector(
+    delay_min: float = 2.0,
+    delay_max: float = 5.0,
+    headless: bool = True,
+):
+    """Phase 1b: Collect WBIDs via new-releases filter, iterating years 2026→1870.
+    Runs two passes: first rated whiskies, then unrated (votes=0)."""
+    conn = get_connection()
+    init_db(conn)
 
     total_new = 0
 
@@ -353,44 +395,12 @@ async def run_releases_collector(
         await _warmup(page)
 
         try:
-            for year in range(RELEASES_START_YEAR, RELEASES_END_YEAR - 1, -1):
-                if last_year and year >= last_year:
-                    continue
-
-                url = f"{RELEASES_URL}?bottle_date_year={year}"
-                if votes != "":
-                    url += f"&votes={votes}"
-                page_num = 1
-                year_new = 0
-
-                while url:
-                    results, next_url = await _fetch_releases_page(page, url)
-
-                    for item in results:
-                        if not has_wbid(conn, item["wbid"]):
-                            save_whisky_basic(conn, item)
-                            year_new += 1
-
-                    log.info(
-                        "Year %d page %d: %d results, %d new",
-                        year, page_num, len(results), year_new,
-                    )
-
-                    url = next_url
-                    page_num += 1
-                    await asyncio.sleep(random.uniform(delay_min, delay_max))
-
-                total_new += year_new
-                set_releases_state(conn, year, filter_key)
-                log.info(
-                    "Year %d done: %d new (total in DB: %d)",
-                    year, year_new, get_whisky_count(conn),
-                )
-
+            total_new += await _run_releases_pass(page, conn, "", delay_min, delay_max)
+            total_new += await _run_releases_pass(page, conn, "0", delay_min, delay_max)
         except KeyboardInterrupt:
             log.info("Interrupted.")
         except Exception as e:
-            log.error("Browser error: %s — restarting not implemented yet", e)
+            log.error("Browser error: %s", e)
         finally:
             await browser.close()
             conn.close()
