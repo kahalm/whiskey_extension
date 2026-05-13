@@ -91,6 +91,7 @@ def cmd_reset(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Whiskybase Scraper")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     sub = parser.add_subparsers(dest="command")
 
     # releases command (Phase 1b — default)
@@ -129,6 +130,9 @@ def main():
     args = parser.parse_args()
     if not args.command:
         args = parser.parse_args(["releases"])
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     args.func(args)
 
