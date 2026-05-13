@@ -1,0 +1,8 @@
+__pycache__/
+*.db
+*.pyc
+.git/
+.claude/
+.env
+venv/
+debug_*.py

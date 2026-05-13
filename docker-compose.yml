@@ -1,0 +1,37 @@
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-whiskyroot}
+      MARIADB_DATABASE: whiskybase
+      MARIADB_USER: whisky
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-whisky}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  scraper:
+    # Lokal: docker compose build scraper
+    # GHCR:  image: ghcr.io/OWNER/whiskey_extension:latest
+    build: .
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: 127.0.0.1
+      DB_USER: whisky
+      DB_PASSWORD: ${MARIADB_PASSWORD:-whisky}
+      DB_NAME: whiskybase
+    command: ["search"]
+
+volumes:
+  db-data:
