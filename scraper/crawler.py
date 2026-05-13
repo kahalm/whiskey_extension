@@ -594,7 +594,7 @@ async def run_detail_crawler(
 
 async def _create_browser(p, headless: bool) -> tuple[Browser, BrowserContext, Page]:
     browser = await p.chromium.launch(
-        headless=False,
+        headless=headless,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",

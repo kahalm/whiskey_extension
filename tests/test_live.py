@@ -34,7 +34,7 @@ def browser_page(event_loop):
     async def setup():
         nonlocal pw, browser
         pw = await async_playwright().start()
-        browser, context, page = await _create_browser(pw, headless=True)
+        browser, context, page = await _create_browser(pw, headless=False)
         await _warmup(page)
         return page
 
