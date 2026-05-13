@@ -9,8 +9,20 @@ import asyncio
 import logging
 import sys
 
-from scraper.crawler import run_search_collector, run_detail_crawler
-from scraper.db import get_connection, init_db, get_last_wbid, get_whisky_count, get_detail_count, get_search_state
+from scraper.crawler import run_search_collector, run_detail_crawler, run_releases_collector
+from scraper.db import get_connection, init_db, get_last_wbid, get_whisky_count, get_detail_count, get_search_state, get_releases_state
+
+
+def cmd_releases(args):
+    """Phase 1b: Collect WBIDs via new-releases filter."""
+    asyncio.run(
+        run_releases_collector(
+            delay_min=args.delay_min,
+            delay_max=args.delay_max,
+            headless=not args.visible,
+            votes=args.votes,
+        )
+    )
 
 
 def cmd_search(args):
@@ -44,10 +56,12 @@ def cmd_status(args):
     detail = get_detail_count(conn)
     last_wbid = get_last_wbid(conn)
     last_query = get_search_state(conn)
+    last_year = get_releases_state(conn)
     conn.close()
     print(f"Whiskies in DB:      {count}")
     print(f"  with full details: {detail}")
     print(f"  basic only:        {count - detail}")
+    print(f"Last releases year:  {last_year or 'not started'}")
     print(f"Last search query:   '{last_query}'")
     print(f"Last detail WBID:    {last_wbid}")
 
@@ -58,6 +72,7 @@ def cmd_reset(args):
         cur.execute("DROP TABLE IF EXISTS whiskies")
         cur.execute("DROP TABLE IF EXISTS scrape_state")
         cur.execute("DROP TABLE IF EXISTS search_state")
+        cur.execute("DROP TABLE IF EXISTS releases_state")
     conn.commit()
     conn.close()
     print("All tables dropped.")
@@ -66,6 +81,14 @@ def cmd_reset(args):
 def main():
     parser = argparse.ArgumentParser(description="Whiskybase Scraper")
     sub = parser.add_subparsers(dest="command")
+
+    # releases command (Phase 1b — default)
+    p_releases = sub.add_parser("releases", help="Collect WBIDs via new-releases filter (year by year)")
+    p_releases.add_argument("--delay-min", type=float, default=2.0, help="Min delay (seconds)")
+    p_releases.add_argument("--delay-max", type=float, default=5.0, help="Max delay (seconds)")
+    p_releases.add_argument("--visible", action="store_true", help="Show browser window")
+    p_releases.add_argument("--votes", type=str, default="", help="Filter by votes (e.g. '0' for unrated)")
+    p_releases.set_defaults(func=cmd_releases)
 
     # search command (Phase 1)
     p_search = sub.add_parser("search", help="Phase 1: Collect WBIDs via search queries")
@@ -93,8 +116,7 @@ def main():
 
     args = parser.parse_args()
     if not args.command:
-        parser.print_help()
-        sys.exit(1)
+        args = parser.parse_args(["releases"])
 
     args.func(args)
 

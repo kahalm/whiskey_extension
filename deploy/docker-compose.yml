@@ -3,12 +3,12 @@ services:
     image: mariadb:11
     restart: unless-stopped
     ports:
-      - "3306:3306"
+      - "${DB_PORT:-3306}:3306"
     environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-whiskyroot}
-      MARIADB_DATABASE: whiskybase
-      MARIADB_USER: whisky
-      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-whisky}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
     volumes:
       - db-data:/var/lib/mysql
     healthcheck:
@@ -19,18 +19,18 @@ services:
       retries: 3
 
   scraper:
-    # Lokal: docker compose build scraper
-    # GHCR:  image: ghcr.io/OWNER/whiskey_extension:latest
-    build: .
+    image: ghcr.io/kahalm/whiskey_extension:latest
     network_mode: host
+    restart: "no"
     depends_on:
       db:
         condition: service_healthy
     environment:
       DB_HOST: 127.0.0.1
-      DB_USER: whisky
-      DB_PASSWORD: ${MARIADB_PASSWORD:-whisky}
-      DB_NAME: whiskybase
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${MARIADB_PASSWORD}
+      DB_NAME: ${DB_NAME}
     command: ["releases"]
 
 volumes:

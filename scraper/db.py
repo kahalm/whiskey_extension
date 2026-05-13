@@ -74,6 +74,13 @@ def init_db(conn):
             )
         """)
         cur.execute("INSERT IGNORE INTO search_state (id, last_query) VALUES (1, '')")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS releases_state (
+                id INT PRIMARY KEY CHECK (id = 1),
+                last_year INT NOT NULL DEFAULT 0
+            )
+        """)
+        cur.execute("INSERT IGNORE INTO releases_state (id, last_year) VALUES (1, 0)")
     conn.commit()
 
 
@@ -131,6 +138,19 @@ def get_search_state(conn) -> str:
 def set_search_state(conn, query: str):
     with conn.cursor() as cur:
         cur.execute("UPDATE search_state SET last_query = %s WHERE id = 1", (query,))
+    conn.commit()
+
+
+def get_releases_state(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT last_year FROM releases_state WHERE id = 1")
+        row = cur.fetchone()
+        return row["last_year"] if row else 0
+
+
+def set_releases_state(conn, year: int):
+    with conn.cursor() as cur:
+        cur.execute("UPDATE releases_state SET last_year = %s WHERE id = 1", (year,))
     conn.commit()
 
 

@@ -12,12 +12,14 @@ from scraper.db import (
     get_connection, init_db, save_whisky, save_whisky_basic,
     get_last_wbid, set_last_wbid, get_whisky_count,
     get_search_state, set_search_state, has_wbid,
+    get_releases_state, set_releases_state,
 )
 
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://www.whiskybase.com/whiskies/whisky"
 SEARCH_URL = "https://www.whiskybase.com/search-v1/whisky"
+RELEASES_URL = "https://www.whiskybase.com/whiskies/new-releases"
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +205,114 @@ async def run_search_collector(
             conn.close()
 
     log.info("Search collector done. %d new whiskies added.", total_new)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1b: Collect WBIDs via new-releases filter (year by year)
+# ---------------------------------------------------------------------------
+
+RELEASES_START_YEAR = 2026
+RELEASES_END_YEAR = 1870
+
+
+async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | None]:
+    """Fetch a single releases page, return (results, next_page_url | None)."""
+    try:
+        response = await page.goto(url, wait_until="load", timeout=60000)
+        if not response or response.status != 200:
+            log.warning("Releases page %s: HTTP %s", url, response.status if response else "None")
+            return [], None
+
+        await page.wait_for_selector("table.whiskytable, .no-results, h1", timeout=15000)
+        await asyncio.sleep(1)
+
+        html = await page.content()
+        results = parse_search_results(html)
+
+        # Check for next page link
+        soup = BeautifulSoup(html, "html.parser")
+        next_link = soup.select_one("a.next, li.next a, a[rel='next']")
+        next_url = None
+        if next_link and next_link.get("href"):
+            href = next_link["href"]
+            if href.startswith("/"):
+                next_url = "https://www.whiskybase.com" + href
+            elif href.startswith("http"):
+                next_url = href
+
+        return results, next_url
+
+    except Exception as e:
+        log.error("Releases page %s: %s", url, e)
+        return [], None
+
+
+async def run_releases_collector(
+    delay_min: float = 2.0,
+    delay_max: float = 5.0,
+    headless: bool = True,
+    votes: str = "",
+):
+    """Phase 1b: Collect WBIDs via new-releases filter, iterating years 2026→1870."""
+    conn = get_connection()
+    init_db(conn)
+
+    last_year = get_releases_state(conn)
+    log.info(
+        "Releases collector: years %d→%d, %d whiskies in DB%s",
+        RELEASES_START_YEAR, RELEASES_END_YEAR,
+        get_whisky_count(conn),
+        f" (resuming after year {last_year})" if last_year else "",
+    )
+
+    total_new = 0
+
+    async with async_playwright() as p:
+        browser, context, page = await _create_browser(p, headless)
+        await _warmup(page)
+
+        try:
+            for year in range(RELEASES_START_YEAR, RELEASES_END_YEAR - 1, -1):
+                if last_year and year >= last_year:
+                    continue
+
+                url = f"{RELEASES_URL}?bottle_date_year={year}"
+                if votes != "":
+                    url += f"&votes={votes}"
+                page_num = 1
+                year_new = 0
+
+                while url:
+                    results, next_url = await _fetch_releases_page(page, url)
+
+                    for item in results:
+                        if not has_wbid(conn, item["wbid"]):
+                            save_whisky_basic(conn, item)
+                            year_new += 1
+
+                    log.info(
+                        "Year %d page %d: %d results, %d new",
+                        year, page_num, len(results), year_new,
+                    )
+
+                    url = next_url
+                    page_num += 1
+                    await asyncio.sleep(random.uniform(delay_min, delay_max))
+
+                total_new += year_new
+                set_releases_state(conn, year)
+                log.info(
+                    "Year %d done: %d new (total in DB: %d)",
+                    year, year_new, get_whisky_count(conn),
+                )
+
+        except KeyboardInterrupt:
+            log.info("Interrupted.")
+        finally:
+            await browser.close()
+            conn.close()
+
+    log.info("Releases collector done. %d new whiskies added.", total_new)
 
 
 # ---------------------------------------------------------------------------
