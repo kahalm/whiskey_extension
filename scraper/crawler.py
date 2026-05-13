@@ -517,8 +517,10 @@ async def run_detail_crawler(
     conn = get_connection()
     init_db(conn)
 
+    total_in_db = get_whisky_count(conn)
     wbids = get_unscraped_wbids(conn)
-    log.info("Detail crawler: %d whiskies to scrape", len(wbids))
+    already_done = total_in_db - len(wbids)
+    log.info("Detail crawler: %d/%d still to scrape", len(wbids), total_in_db)
 
     if not wbids:
         conn.close()
@@ -540,7 +542,7 @@ async def run_detail_crawler(
                     scraped += 1
                     log.info(
                         "[%d/%d] %s - %s (%s)",
-                        i + 1, len(wbids),
+                        already_done + scraped, total_in_db,
                         data.get("distillery", "?"),
                         data["name"],
                         data.get("strength", "?"),
