@@ -10,7 +10,7 @@ import logging
 import sys
 
 from scraper.crawler import run_search_collector, run_detail_crawler, run_releases_collector
-from scraper.db import get_connection, init_db, get_last_wbid, get_whisky_count, get_detail_count, get_search_state, get_releases_state
+from scraper.db import get_connection, init_db, get_last_wbid, get_whisky_count, get_detail_count, get_search_state, get_all_releases_states
 
 
 def cmd_releases(args):
@@ -56,12 +56,16 @@ def cmd_status(args):
     detail = get_detail_count(conn)
     last_wbid = get_last_wbid(conn)
     last_query = get_search_state(conn)
-    last_year = get_releases_state(conn)
+    releases_states = get_all_releases_states(conn)
     conn.close()
     print(f"Whiskies in DB:      {count}")
     print(f"  with full details: {detail}")
     print(f"  basic only:        {count - detail}")
-    print(f"Last releases year:  {last_year or 'not started'}")
+    if releases_states:
+        for rs in releases_states:
+            print(f"Releases [{rs['filter_key']}]: last year {rs['last_year']}")
+    else:
+        print(f"Releases:            not started")
     print(f"Last search query:   '{last_query}'")
     print(f"Last detail WBID:    {last_wbid}")
 

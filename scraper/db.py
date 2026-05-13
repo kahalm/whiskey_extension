@@ -74,13 +74,30 @@ def init_db(conn):
             )
         """)
         cur.execute("INSERT IGNORE INTO search_state (id, last_query) VALUES (1, '')")
+        # releases_state: migrate old single-row schema if needed
         cur.execute("""
             CREATE TABLE IF NOT EXISTS releases_state (
-                id INT PRIMARY KEY CHECK (id = 1),
+                filter_key VARCHAR(64) PRIMARY KEY,
                 last_year INT NOT NULL DEFAULT 0
             )
         """)
-        cur.execute("INSERT IGNORE INTO releases_state (id, last_year) VALUES (1, 0)")
+        cur.execute("SHOW COLUMNS FROM releases_state LIKE 'id'")
+        if cur.fetchone():
+            cur.execute("SELECT last_year FROM releases_state LIMIT 1")
+            old_row = cur.fetchone()
+            old_year = old_row["last_year"] if old_row else 0
+            cur.execute("DROP TABLE releases_state")
+            cur.execute("""
+                CREATE TABLE releases_state (
+                    filter_key VARCHAR(64) PRIMARY KEY,
+                    last_year INT NOT NULL DEFAULT 0
+                )
+            """)
+            if old_year:
+                cur.execute(
+                    "INSERT INTO releases_state (filter_key, last_year) VALUES ('default', %s)",
+                    (old_year,),
+                )
     conn.commit()
 
 
@@ -141,17 +158,27 @@ def set_search_state(conn, query: str):
     conn.commit()
 
 
-def get_releases_state(conn) -> int:
+def get_releases_state(conn, filter_key: str = "default") -> int:
     with conn.cursor() as cur:
-        cur.execute("SELECT last_year FROM releases_state WHERE id = 1")
+        cur.execute("SELECT last_year FROM releases_state WHERE filter_key = %s", (filter_key,))
         row = cur.fetchone()
         return row["last_year"] if row else 0
 
 
-def set_releases_state(conn, year: int):
+def set_releases_state(conn, year: int, filter_key: str = "default"):
     with conn.cursor() as cur:
-        cur.execute("UPDATE releases_state SET last_year = %s WHERE id = 1", (year,))
+        cur.execute(
+            "INSERT INTO releases_state (filter_key, last_year) VALUES (%s, %s) "
+            "ON DUPLICATE KEY UPDATE last_year = %s",
+            (filter_key, year, year),
+        )
     conn.commit()
+
+
+def get_all_releases_states(conn) -> list[dict]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT filter_key, last_year FROM releases_state ORDER BY filter_key")
+        return cur.fetchall()
 
 
 def get_whisky_count(conn) -> int:

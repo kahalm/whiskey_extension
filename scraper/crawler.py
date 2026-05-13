@@ -257,10 +257,11 @@ async def run_releases_collector(
     conn = get_connection()
     init_db(conn)
 
-    last_year = get_releases_state(conn)
+    filter_key = f"votes={votes}" if votes != "" else "default"
+    last_year = get_releases_state(conn, filter_key)
     log.info(
-        "Releases collector: years %d→%d, %d whiskies in DB%s",
-        RELEASES_START_YEAR, RELEASES_END_YEAR,
+        "Releases collector [%s]: years %d→%d, %d whiskies in DB%s",
+        filter_key, RELEASES_START_YEAR, RELEASES_END_YEAR,
         get_whisky_count(conn),
         f" (resuming after year {last_year})" if last_year else "",
     )
@@ -300,7 +301,7 @@ async def run_releases_collector(
                     await asyncio.sleep(random.uniform(delay_min, delay_max))
 
                 total_new += year_new
-                set_releases_state(conn, year)
+                set_releases_state(conn, year, filter_key)
                 log.info(
                     "Year %d done: %d new (total in DB: %d)",
                     year, year_new, get_whisky_count(conn),
