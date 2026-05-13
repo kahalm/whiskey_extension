@@ -195,7 +195,10 @@ def get_whisky_count(conn) -> int:
 
 def get_unscraped_wbids(conn) -> list[int]:
     with conn.cursor() as cur:
-        cur.execute("SELECT wbid FROM whiskies WHERE detail_scraped = 0 ORDER BY wbid")
+        cur.execute(
+            "SELECT wbid FROM whiskies WHERE detail_scraped = 0 "
+            "ORDER BY rating DESC, bottled DESC, wbid DESC"
+        )
         return [row["wbid"] for row in cur.fetchall()]
 
 
