@@ -13,6 +13,7 @@ from scraper.db import (
     get_last_wbid, set_last_wbid, get_whisky_count,
     get_search_state, set_search_state, has_wbid,
     get_releases_state, set_releases_state,
+    get_unscraped_wbids,
 )
 
 log = logging.getLogger(__name__)
@@ -507,20 +508,21 @@ async def scrape_whisky(page: Page, wbid: int) -> dict | None:
 
 
 async def run_detail_crawler(
-    start_wbid: int | None = None,
-    end_wbid: int = 400000,
     delay_min: float = 2.0,
     delay_max: float = 5.0,
     headless: bool = True,
 ):
-    """Phase 2: Crawl individual whisky pages for full details."""
+    """Phase 2: Crawl individual whisky pages for full details.
+    Only processes WBIDs already in the DB that haven't been detail-scraped."""
     conn = get_connection()
     init_db(conn)
 
-    if start_wbid is None:
-        start_wbid = get_last_wbid(conn) + 1
+    wbids = get_unscraped_wbids(conn)
+    log.info("Detail crawler: %d whiskies to scrape", len(wbids))
 
-    log.info("Detail crawler: WBID %d to %d", start_wbid, end_wbid)
+    if not wbids:
+        conn.close()
+        return
 
     scraped = 0
     skipped = 0
@@ -530,36 +532,34 @@ async def run_detail_crawler(
         await _warmup(page)
 
         try:
-            for wbid in range(start_wbid, end_wbid + 1):
+            for i, wbid in enumerate(wbids):
                 data = await scrape_whisky(page, wbid)
 
                 if data:
                     save_whisky(conn, data)
                     scraped += 1
                     log.info(
-                        "[%d] %s - %s (%s)",
-                        wbid,
+                        "[%d/%d] %s - %s (%s)",
+                        i + 1, len(wbids),
                         data.get("distillery", "?"),
                         data["name"],
                         data.get("strength", "?"),
                     )
                 else:
                     skipped += 1
-                    log.debug("[%d] Not found / skipped", wbid)
+                    log.debug("[%d/%d] WBID %d not found / skipped", i + 1, len(wbids), wbid)
 
-                set_last_wbid(conn, wbid)
-
-                if (wbid - start_wbid + 1) % 100 == 0:
+                if (i + 1) % 100 == 0:
                     log.info(
-                        "Progress: WBID %d | scraped=%d skipped=%d",
-                        wbid, scraped, skipped,
+                        "Progress: %d/%d | scraped=%d skipped=%d",
+                        i + 1, len(wbids), scraped, skipped,
                     )
 
                 delay = random.uniform(delay_min, delay_max)
                 await asyncio.sleep(delay)
 
         except KeyboardInterrupt:
-            log.info("Interrupted at WBID %d", wbid)
+            log.info("Interrupted at %d/%d", i + 1, len(wbids))
         finally:
             await browser.close()
             conn.close()

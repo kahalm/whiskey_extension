@@ -39,8 +39,6 @@ def cmd_detail(args):
     """Phase 2: Crawl individual pages."""
     asyncio.run(
         run_detail_crawler(
-            start_wbid=args.start,
-            end_wbid=args.end,
             delay_min=args.delay_min,
             delay_max=args.delay_max,
             headless=not args.visible,
@@ -111,8 +109,6 @@ def main():
 
     # detail command (Phase 2)
     p_detail = sub.add_parser("detail", help="Phase 2: Crawl individual pages for full details")
-    p_detail.add_argument("--start", type=int, default=None, help="Start WBID (default: resume)")
-    p_detail.add_argument("--end", type=int, default=400000, help="End WBID")
     p_detail.add_argument("--delay-min", type=float, default=2.0, help="Min delay (seconds)")
     p_detail.add_argument("--delay-max", type=float, default=5.0, help="Max delay (seconds)")
     p_detail.add_argument("--visible", action="store_true", help="Show browser window")
