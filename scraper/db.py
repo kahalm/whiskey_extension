@@ -101,9 +101,12 @@ def init_db(conn):
     conn.commit()
 
 
+DETAIL_VERSION = 2
+
+
 def save_whisky(conn, data: dict):
     """Save full detail data (Phase 2). Overwrites all fields."""
-    data = {**data, "detail_scraped": 1}
+    data = {**data, "detail_scraped": DETAIL_VERSION}
     cols = ", ".join(data.keys())
     placeholders = ", ".join(["%s"] * len(data))
     with conn.cursor() as cur:
@@ -196,8 +199,9 @@ def get_whisky_count(conn) -> int:
 def get_unscraped_wbids(conn) -> list[int]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT wbid FROM whiskies WHERE detail_scraped = 0 "
-            "ORDER BY rating DESC, bottled DESC, wbid DESC"
+            "SELECT wbid FROM whiskies WHERE detail_scraped < %s "
+            "ORDER BY rating DESC, bottled DESC, wbid DESC",
+            (DETAIL_VERSION,),
         )
         return [row["wbid"] for row in cur.fetchall()]
 
