@@ -503,12 +503,18 @@ async def scrape_whisky(page: Page, wbid: int) -> dict | None:
         if response and response.status == 404:
             return None
 
-        # Wait for real content (Cloudflare may solve JS challenge first)
+        # Wait for real content (not Cloudflare challenge page)
         try:
-            await page.wait_for_selector("h1", timeout=30000)
+            await page.wait_for_selector("dl, .whisky-header, .block-whisky", timeout=30000)
         except Exception:
-            log.warning("WBID %d: page didn't load (status %s)", wbid, response.status if response else "?")
-            return None
+            # Cloudflare may need more time
+            log.debug("WBID %d: waiting for Cloudflare...", wbid)
+            await asyncio.sleep(10)
+            try:
+                await page.wait_for_selector("dl, .whisky-header, .block-whisky", timeout=30000)
+            except Exception:
+                log.warning("WBID %d: page didn't load (status %s)", wbid, response.status if response else "?")
+                return None
         await asyncio.sleep(1)
 
         html = await page.content()
