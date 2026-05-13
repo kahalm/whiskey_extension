@@ -215,6 +215,76 @@ RELEASES_START_YEAR = 2026
 RELEASES_END_YEAR = 1870
 
 
+def parse_releases_table(html: str) -> list[dict]:
+    """Parse new-releases table. Different column layout than search results.
+
+    Columns: [0]img  [1]Name(link)  [2]Stated Age  [3]Strength
+             [4]Size  [5]Bottled  [6]Cask number  [7]Rating
+             [8]Versions  [9]Whisky listings  [10]empty
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+
+    table = soup.select_one("table.whiskytable")
+    if not table:
+        return results
+
+    for row in table.find_all("tr")[1:]:  # skip header
+        cells = row.find_all("td")
+        if len(cells) < 8:
+            continue
+
+        # Name + WBID from cell [1]
+        name_cell = cells[1]
+        link = name_cell.find("a", href=True)
+        if not link or "/whiskies/whisky/" not in link["href"]:
+            continue
+
+        match = re.search(r"/whiskies/whisky/(\d+)", link["href"])
+        if not match:
+            continue
+
+        wbid = int(match.group(1))
+        name = link.get_text(strip=True)
+
+        # Image from cell [0]
+        image_url = None
+        img_link = cells[0].find("a", href=True)
+        if img_link:
+            src = img_link.get("href", "")
+            if src and "default" not in src:
+                image_url = src
+
+        age = cells[2].get_text(strip=True) or None
+        strength = cells[3].get_text(strip=True) or None
+        size = cells[4].get_text(strip=True) or None
+        bottled = cells[5].get_text(strip=True) or None
+        cask_number = cells[6].get_text(strip=True) or None
+        rating_text = cells[7].get_text(strip=True) or None
+
+        rating = None
+        if rating_text:
+            try:
+                rating = float(rating_text)
+            except ValueError:
+                pass
+
+        results.append({
+            "wbid": wbid,
+            "name": name or None,
+            "age": age,
+            "strength": strength,
+            "size": size,
+            "bottled": bottled,
+            "cask_number": cask_number,
+            "rating": rating,
+            "image_url": image_url,
+            "url": f"{BASE_URL}/{wbid}",
+        })
+
+    return results
+
+
 async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | None]:
     """Fetch a single releases page, return (results, next_page_url | None)."""
     try:
@@ -227,7 +297,6 @@ async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | 
         try:
             await page.wait_for_selector("table.whiskytable, .no-results", timeout=30000)
         except Exception:
-            # Cloudflare may need more time — wait and retry
             log.info("Waiting for Cloudflare challenge on %s ...", url)
             await asyncio.sleep(10)
             try:
@@ -238,16 +307,7 @@ async def _fetch_releases_page(page: Page, url: str) -> tuple[list[dict], str | 
         await asyncio.sleep(1)
 
         html = await page.content()
-        results = parse_search_results(html)
-
-        if not results:
-            soup_dbg = BeautifulSoup(html, "html.parser")
-            tables = soup_dbg.find_all("table")
-            log.info("DEBUG: %d tables found, classes: %s",
-                     len(tables), [t.get("class") for t in tables])
-            title = soup_dbg.find("title")
-            log.info("DEBUG: page title: %s, HTML length: %d",
-                     title.get_text(strip=True) if title else "?", len(html))
+        results = parse_releases_table(html)
 
         # Check for next page link
         soup = BeautifulSoup(html, "html.parser")
@@ -329,6 +389,8 @@ async def run_releases_collector(
 
         except KeyboardInterrupt:
             log.info("Interrupted.")
+        except Exception as e:
+            log.error("Browser error: %s — restarting not implemented yet", e)
         finally:
             await browser.close()
             conn.close()

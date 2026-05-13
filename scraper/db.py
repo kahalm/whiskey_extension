@@ -167,11 +167,17 @@ def get_releases_state(conn, filter_key: str = "default") -> int:
 
 def set_releases_state(conn, year: int, filter_key: str = "default"):
     with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO releases_state (filter_key, last_year) VALUES (%s, %s) "
-            "ON DUPLICATE KEY UPDATE last_year = %s",
-            (filter_key, year, year),
-        )
+        cur.execute("SELECT 1 FROM releases_state WHERE filter_key = %s", (filter_key,))
+        if cur.fetchone():
+            cur.execute(
+                "UPDATE releases_state SET last_year = %s WHERE filter_key = %s",
+                (year, filter_key),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO releases_state (filter_key, last_year) VALUES (%s, %s)",
+                (filter_key, year),
+            )
     conn.commit()
 
 
