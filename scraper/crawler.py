@@ -24,16 +24,14 @@ SEARCH_URL = "https://www.whiskybase.com/search-v1/whisky"
 # Phase 1: Bulk-collect WBIDs + basic data via search
 # ---------------------------------------------------------------------------
 
-# Systematic query list to cover as many whiskies as possible
 SEARCH_QUERIES = (
-    # Single letters
-    list(string.ascii_lowercase)
-    # Two-letter combos for common starts
-    + [a + b for a in string.ascii_lowercase for b in string.ascii_lowercase]
-    # Digits (years, ages)
+    [a + b for a in string.ascii_lowercase for b in string.ascii_lowercase]
     + [str(y) for y in range(1900, 2027)]
     + [str(n) for n in range(1, 100)]
 )
+
+RESULT_LIMIT = 400   # expand query if results >= this
+MAX_QUERY_DEPTH = 5  # max expansion depth (e.g. 'abcde')
 
 
 def parse_search_results(html: str) -> list[dict]:
@@ -125,6 +123,51 @@ async def search_whiskies(page: Page, query: str) -> list[dict]:
         return []
 
 
+async def _search_recursive(page, conn, query, last_query, delay_min, delay_max):
+    """Search for a query, recursively expanding with [a-z] if results hit the limit."""
+    # Skip logic for resume
+    if last_query:
+        if query == last_query:
+            return 0
+        if query < last_query and not last_query.startswith(query):
+            return 0
+
+    # If resuming into an expanded parent, skip fetch and go straight to children
+    resuming = last_query and last_query.startswith(query) and query != last_query
+
+    new_count = 0
+    result_count = 0
+
+    if not resuming:
+        results = await search_whiskies(page, query)
+        result_count = len(results)
+        for item in results:
+            if not has_wbid(conn, item["wbid"]):
+                save_whisky_basic(conn, item)
+                new_count += 1
+        await asyncio.sleep(random.uniform(delay_min, delay_max))
+
+    if resuming or (result_count >= RESULT_LIMIT and len(query) < MAX_QUERY_DEPTH):
+        if not resuming:
+            log.info(
+                "'%s': %d results, %d new — expanding to %s[a-z]",
+                query, result_count, new_count, query,
+            )
+        for c in string.ascii_lowercase:
+            new_count += await _search_recursive(
+                page, conn, query + c, last_query, delay_min, delay_max
+            )
+        set_search_state(conn, query)
+    elif not resuming:
+        log.info(
+            "'%s': %d results, %d new (total in DB: %d)",
+            query, result_count, new_count, get_whisky_count(conn),
+        )
+        set_search_state(conn, query)
+
+    return new_count
+
+
 async def run_search_collector(
     delay_min: float = 2.0,
     delay_max: float = 5.0,
@@ -135,25 +178,12 @@ async def run_search_collector(
     init_db(conn)
 
     last_query = get_search_state(conn)
-    start_idx = 0
-    if last_query:
-        try:
-            start_idx = SEARCH_QUERIES.index(last_query) + 1
-        except ValueError:
-            start_idx = 0
-
-    remaining = SEARCH_QUERIES[start_idx:]
     log.info(
-        "Search collector: %d queries remaining (starting from '%s'), %d whiskies in DB",
-        len(remaining),
-        remaining[0] if remaining else "done",
+        "Search collector: %d base queries, %d whiskies in DB%s",
+        len(SEARCH_QUERIES),
         get_whisky_count(conn),
+        f" (resuming from '{last_query}')" if last_query else "",
     )
-
-    if not remaining:
-        log.info("All search queries already processed.")
-        conn.close()
-        return
 
     total_new = 0
 
@@ -162,33 +192,12 @@ async def run_search_collector(
         await _warmup(page)
 
         try:
-            for i, query in enumerate(remaining):
-                results = await search_whiskies(page, query)
-
-                new_count = 0
-                for item in results:
-                    if not has_wbid(conn, item["wbid"]):
-                        save_whisky_basic(conn, item)
-                        new_count += 1
-
-                total_new += new_count
-                set_search_state(conn, query)
-
-                log.info(
-                    "[%d/%d] q='%s': %d results, %d new (total in DB: %d)",
-                    start_idx + i + 1,
-                    len(SEARCH_QUERIES),
-                    query,
-                    len(results),
-                    new_count,
-                    get_whisky_count(conn),
+            for query in SEARCH_QUERIES:
+                total_new += await _search_recursive(
+                    page, conn, query, last_query, delay_min, delay_max
                 )
-
-                delay = random.uniform(delay_min, delay_max)
-                await asyncio.sleep(delay)
-
         except KeyboardInterrupt:
-            log.info("Interrupted at query '%s'", query)
+            log.info("Interrupted.")
         finally:
             await browser.close()
             conn.close()
