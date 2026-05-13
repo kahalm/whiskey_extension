@@ -541,11 +541,12 @@ async def run_detail_crawler(
                     save_whisky(conn, data)
                     scraped += 1
                     log.info(
-                        "[%d/%d] %s - %s (%s)",
+                        "[%d/%d] %s - %s (%s) rating=%s",
                         already_done + scraped, total_in_db,
                         data.get("distillery", "?"),
                         data["name"],
                         data.get("strength", "?"),
+                        data.get("rating", "?"),
                     )
                 else:
                     skipped += 1
