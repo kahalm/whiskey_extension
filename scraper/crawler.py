@@ -438,6 +438,17 @@ def parse_whisky_page(html: str, wbid: int) -> dict | None:
     if "Category" not in attrs and "Distillery" not in attrs:
         return None
 
+    # Count shop listings
+    shop_count = 0
+    no_listings = soup.find(string=re.compile(r"No active listings", re.IGNORECASE))
+    if no_listings:
+        shop_count = 0
+    else:
+        # Count rows in prices section
+        prices_section = soup.select("#tab-prices tr, .shop-listing")
+        if prices_section:
+            shop_count = max(0, len(prices_section) - 1)  # minus header row
+
     rating = None
     votes = None
     rating_el = soup.select_one("span.votes-rating-current")
@@ -477,6 +488,7 @@ def parse_whisky_page(html: str, wbid: int) -> dict | None:
         "bottled": attrs.get("Bottled"),
         "category": attrs.get("Category"),
         "shop_price": attrs.get("Last average shop price"),
+        "shop_count": shop_count,
         "rating": rating,
         "votes": votes,
         "image_url": image_url,

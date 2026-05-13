@@ -54,7 +54,7 @@ def init_db(conn):
                 scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        for col, typedef in [("barcode", "TEXT"), ("detail_scraped", "INT DEFAULT 0"), ("shop_price", "TEXT")]:
+        for col, typedef in [("barcode", "TEXT"), ("detail_scraped", "INT DEFAULT 0"), ("shop_price", "TEXT"), ("shop_count", "INT")]:
             try:
                 cur.execute(f"ALTER TABLE whiskies ADD COLUMN {col} {typedef}")
             except pymysql.err.OperationalError as e:
@@ -101,7 +101,7 @@ def init_db(conn):
     conn.commit()
 
 
-DETAIL_VERSION = 2
+DETAIL_VERSION = 3
 
 
 def save_whisky(conn, data: dict):
