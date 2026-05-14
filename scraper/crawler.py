@@ -284,13 +284,14 @@ async def _fetch_releases_page(page, url: str) -> tuple[list[dict], str | None]:
         await page.get(url)
 
         # Wait for real content (not Cloudflare challenge page)
-        el = await page.select("table.whiskytable, .no-results", timeout=30)
+        el = await page.select("table.whiskytable, .no-results", timeout=15)
         if el is None:
-            log.info("Waiting for Cloudflare challenge on %s ...", url)
-            await asyncio.sleep(10)
-            el = await page.select("table.whiskytable, .no-results", timeout=30)
+            log.info("Turnstile detected on %s — solving...", url)
+            solved = await _solve_turnstile(page)
+            if solved:
+                el = await page.select("table.whiskytable, .no-results", timeout=15)
             if el is None:
-                log.warning("Page didn't load after Cloudflare wait: %s", url)
+                log.warning("Page didn't load after Turnstile attempt: %s", url)
                 return [], None
         await asyncio.sleep(1)
 
@@ -488,11 +489,12 @@ async def scrape_whisky(page, wbid: int) -> dict | None:
         await page.get(url)
 
         # Wait for real content (not Cloudflare challenge page)
-        el = await page.select("dl, .whisky-header, .block-whisky", timeout=30)
+        el = await page.select("dl, .whisky-header, .block-whisky", timeout=15)
         if el is None:
-            log.debug("WBID %d: waiting for Cloudflare...", wbid)
-            await asyncio.sleep(10)
-            el = await page.select("dl, .whisky-header, .block-whisky", timeout=30)
+            log.debug("WBID %d: Turnstile detected — solving...", wbid)
+            solved = await _solve_turnstile(page)
+            if solved:
+                el = await page.select("dl, .whisky-header, .block-whisky", timeout=15)
             if el is None:
                 log.warning("WBID %d: page didn't load", wbid)
                 return None
@@ -598,12 +600,98 @@ async def _check_ip(browser):
         log.warning("Could not determine public IP: %s", e)
 
 
+async def _solve_turnstile(page):
+    """Detect and click the Cloudflare Turnstile checkbox if present."""
+    for attempt in range(3):
+        await asyncio.sleep(2)
+
+        # Find Turnstile iframe position via JavaScript
+        iframe_info = await page.evaluate("""
+            (() => {
+                const frames = document.querySelectorAll("iframe");
+                for (const f of frames) {
+                    const src = f.src || "";
+                    if (src.includes("challenges.cloudflare.com") || src.includes("turnstile")) {
+                        const rect = f.getBoundingClientRect();
+                        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                    }
+                }
+                const widget = document.querySelector("[id^='cf-chl-widget']");
+                if (widget) {
+                    const iframe = widget.querySelector("iframe");
+                    if (iframe) {
+                        const rect = iframe.getBoundingClientRect();
+                        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                    }
+                }
+                return null;
+            })()
+        """)
+
+        if not iframe_info:
+            log.debug("No Turnstile iframe found")
+            return True  # No challenge present
+
+        log.info(
+            "Turnstile iframe at (%.0f, %.0f) %.0fx%.0f — clicking (attempt %d)...",
+            iframe_info["x"], iframe_info["y"],
+            iframe_info["w"], iframe_info["h"],
+            attempt + 1,
+        )
+
+        # Checkbox is near left edge of iframe, vertically centered
+        cx = int(iframe_info["x"]) + 35
+        cy = int(iframe_info["y"]) + int(iframe_info["h"]) // 2
+
+        # Move mouse, then click via CDP
+        await page.send(uc.cdp.input_.dispatch_mouse_event(
+            type_="mouseMoved", x=cx, y=cy,
+        ))
+        await asyncio.sleep(random.uniform(0.3, 0.7))
+        await page.send(uc.cdp.input_.dispatch_mouse_event(
+            type_="mousePressed", x=cx, y=cy,
+            button=uc.cdp.input_.MouseButton.LEFT, click_count=1,
+        ))
+        await asyncio.sleep(random.uniform(0.05, 0.15))
+        await page.send(uc.cdp.input_.dispatch_mouse_event(
+            type_="mouseReleased", x=cx, y=cy,
+            button=uc.cdp.input_.MouseButton.LEFT, click_count=1,
+        ))
+
+        # Wait for challenge to process
+        await asyncio.sleep(5)
+
+        # Check if Turnstile iframe is gone
+        still_present = await page.evaluate("""
+            (() => {
+                const frames = document.querySelectorAll("iframe");
+                for (const f of frames) {
+                    if ((f.src || "").includes("challenges.cloudflare.com")) return true;
+                }
+                return !!document.querySelector("[id^='cf-chl-widget']");
+            })()
+        """)
+        if not still_present:
+            log.info("Turnstile challenge solved!")
+            return True
+
+        log.warning("Turnstile still present after attempt %d", attempt + 1)
+        await asyncio.sleep(3)
+
+    log.error("Could not solve Turnstile after 3 attempts")
+    return False
+
+
 async def _warmup(browser):
     """Visit homepage to establish cookies and pass Cloudflare challenge."""
     await _check_ip(browser)
     log.info("Warming up: visiting homepage...")
     page = await browser.get("https://www.whiskybase.com")
     await asyncio.sleep(5)
+
+    # Solve Turnstile challenge if present
+    await _solve_turnstile(page)
+
     try:
         accept_btn = await page.find("Accept", best_match=True, timeout=5)
         if accept_btn:
