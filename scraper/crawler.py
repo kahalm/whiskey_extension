@@ -581,7 +581,9 @@ async def _create_browser(headless: bool = True):
         browser_args=[
             "--no-sandbox",
             "--window-size=1920,1080",
-            "--disable-gpu",
+            "--enable-unsafe-swiftshader",
+            "--use-gl=angle",
+            "--use-angle=swiftshader",
         ],
     )
     return browser
@@ -600,12 +602,24 @@ async def _check_ip(browser):
         log.warning("Could not determine public IP: %s", e)
 
 
-async def _solve_turnstile(page):
-    """Detect and click the Cloudflare Turnstile checkbox if present."""
-    for attempt in range(3):
+async def _solve_turnstile(page, max_wait: int = 30):
+    """Wait for Cloudflare challenge to resolve, clicking Turnstile checkbox if it appears.
+
+    The challenge page ("Just a moment...") can resolve in two ways:
+    1. JS challenge passes silently → page redirects automatically
+    2. Turnstile widget appears → needs a click on the checkbox
+    """
+    clicked = False
+    for tick in range(max_wait // 2):
         await asyncio.sleep(2)
 
-        # Find Turnstile iframe position via JavaScript
+        # Check if page title changed (challenge passed)
+        title = await page.evaluate("document.title")
+        if title and "just a moment" not in title.lower():
+            log.info("Cloudflare challenge passed (title: %s)", title)
+            return True
+
+        # Look for Turnstile iframe
         iframe_info = await page.evaluate("""
             (() => {
                 const frames = document.querySelectorAll("iframe");
@@ -613,7 +627,9 @@ async def _solve_turnstile(page):
                     const src = f.src || "";
                     if (src.includes("challenges.cloudflare.com") || src.includes("turnstile")) {
                         const rect = f.getBoundingClientRect();
-                        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                        if (rect.width > 0 && rect.height > 0) {
+                            return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                        }
                     }
                 }
                 const widget = document.querySelector("[id^='cf-chl-widget']");
@@ -621,7 +637,9 @@ async def _solve_turnstile(page):
                     const iframe = widget.querySelector("iframe");
                     if (iframe) {
                         const rect = iframe.getBoundingClientRect();
-                        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                        if (rect.width > 0 && rect.height > 0) {
+                            return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+                        }
                     }
                 }
                 return null;
@@ -629,14 +647,15 @@ async def _solve_turnstile(page):
         """)
 
         if not iframe_info:
-            log.debug("No Turnstile iframe found")
-            return True  # No challenge present
+            # No iframe yet — JS challenge may still be running
+            if tick % 3 == 0:
+                log.debug("Waiting for Cloudflare challenge... (%ds)", (tick + 1) * 2)
+            continue
 
         log.info(
-            "Turnstile iframe at (%.0f, %.0f) %.0fx%.0f — clicking (attempt %d)...",
+            "Turnstile iframe at (%.0f, %.0f) %.0fx%.0f — clicking...",
             iframe_info["x"], iframe_info["y"],
             iframe_info["w"], iframe_info["h"],
-            attempt + 1,
         )
 
         # Checkbox is near left edge of iframe, vertically centered
@@ -657,28 +676,12 @@ async def _solve_turnstile(page):
             type_="mouseReleased", x=cx, y=cy,
             button=uc.cdp.input_.MouseButton.LEFT, click_count=1,
         ))
+        clicked = True
 
-        # Wait for challenge to process
+        # Give Cloudflare time to verify after click
         await asyncio.sleep(5)
 
-        # Check if Turnstile iframe is gone
-        still_present = await page.evaluate("""
-            (() => {
-                const frames = document.querySelectorAll("iframe");
-                for (const f of frames) {
-                    if ((f.src || "").includes("challenges.cloudflare.com")) return true;
-                }
-                return !!document.querySelector("[id^='cf-chl-widget']");
-            })()
-        """)
-        if not still_present:
-            log.info("Turnstile challenge solved!")
-            return True
-
-        log.warning("Turnstile still present after attempt %d", attempt + 1)
-        await asyncio.sleep(3)
-
-    log.error("Could not solve Turnstile after 3 attempts")
+    log.warning("Cloudflare challenge did not resolve within %ds (clicked=%s)", max_wait, clicked)
     return False
 
 
