@@ -589,6 +589,81 @@ async def _create_browser(headless: bool = True):
     return browser
 
 
+_STEALTH_JS = """\
+// --- deviceMemory (missing in Docker → bot signal) ---
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8, configurable: true});
+
+// --- WebGL renderer (SwiftShader → bot signal) ---
+(function() {
+    const VENDOR = 'Google Inc. (NVIDIA)';
+    const RENDERER = 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+    function patchGetParameter(proto) {
+        const orig = proto.getParameter;
+        proto.getParameter = function(param) {
+            if (param === 37445) return VENDOR;
+            if (param === 37446) return RENDERER;
+            return orig.call(this, param);
+        };
+    }
+    if (typeof WebGLRenderingContext !== 'undefined')
+        patchGetParameter(WebGLRenderingContext.prototype);
+    if (typeof WebGL2RenderingContext !== 'undefined')
+        patchGetParameter(WebGL2RenderingContext.prototype);
+})();
+
+// --- Canvas fingerprint noise (Xvfb renders differently than real GPU) ---
+(function() {
+    const origToBlob = HTMLCanvasElement.prototype.toBlob;
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    function addNoise(canvas) {
+        try {
+            const ctx = canvas.getContext('2d');
+            if (!ctx || canvas.width < 2 || canvas.height < 2) return;
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const d = img.data;
+            // Deterministic subtle noise based on pixel position
+            for (let i = 0; i < d.length; i += 4) {
+                d[i]   = d[i]   ^ ((i * 31) & 1);
+                d[i+1] = d[i+1] ^ ((i * 37) & 1);
+            }
+            ctx.putImageData(img, 0, 0);
+        } catch(e) {}
+    }
+    HTMLCanvasElement.prototype.toDataURL = function() {
+        addNoise(this);
+        return origToDataURL.apply(this, arguments);
+    };
+    HTMLCanvasElement.prototype.toBlob = function() {
+        addNoise(this);
+        return origToBlob.apply(this, arguments);
+    };
+})();
+
+// --- AudioContext fingerprint noise ---
+(function() {
+    if (typeof AudioContext === 'undefined' && typeof webkitAudioContext === 'undefined') return;
+    const AC = typeof AudioContext !== 'undefined' ? AudioContext : webkitAudioContext;
+    const origGetFloatFreqData = AnalyserNode.prototype.getFloatFrequencyData;
+    AnalyserNode.prototype.getFloatFrequencyData = function(array) {
+        origGetFloatFreqData.call(this, array);
+        for (let i = 0; i < array.length; i++) {
+            array[i] += 0.1 * ((i * 13) % 7 - 3);
+        }
+    };
+})();
+"""
+
+
+async def _inject_stealth(page):
+    """Inject stealth overrides that run before any page script."""
+    try:
+        await page.send(uc.cdp.page.enable())
+        await page.send(uc.cdp.page.add_script_to_evaluate_on_new_document(source=_STEALTH_JS))
+        log.debug("Stealth JS injected")
+    except Exception as e:
+        log.warning("Could not inject stealth JS: %s", e)
+
+
 async def _check_ip(browser):
     """Log public IP address for verification."""
     try:
@@ -689,7 +764,9 @@ async def _warmup(browser):
     """Visit homepage to establish cookies and pass Cloudflare challenge."""
     await _check_ip(browser)
     log.info("Warming up: visiting homepage...")
-    page = await browser.get("https://www.whiskybase.com")
+    page = await browser.get("about:blank")
+    await _inject_stealth(page)
+    await page.get("https://www.whiskybase.com")
     await asyncio.sleep(5)
 
     # Solve Turnstile challenge if present
